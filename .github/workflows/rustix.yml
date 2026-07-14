@@ -1,0 +1,92 @@
+name: rustix-boot
+
+on:
+  schedule:
+    # 每 6 小时跑一次 (避开整点, GitHub Actions 整点最拥堵会延迟)
+    - cron: '17 */6 * * *'
+  workflow_dispatch: {}   # 支持手动触发
+
+# 避免上一次还没跑完就又触发, 排队串行
+concurrency:
+  group: rustix-boot
+  cancel-in-progress: false
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps + Chromium
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      # ---- 代理: 有 PROXY_STR 才启用 sing-box, 否则直连 ----
+      - name: Setup sing-box proxy
+        id: proxy
+        env:
+          PROXY_STR: ${{ secrets.PROXY_STR }}
+        run: |
+          if [ -z "$PROXY_STR" ]; then
+            echo "未配置 PROXY_STR, 浏览器将直连"
+            echo "browser_proxy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "生成 sing-box 配置..."
+          python convert_proxy.py
+
+          echo "安装 sing-box..."
+          SB_VER="1.9.3"
+          curl -fsSL -o sing-box.tar.gz \
+            "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-amd64.tar.gz"
+          tar -xzf sing-box.tar.gz
+          sudo install "sing-box-${SB_VER}-linux-amd64/sing-box" /usr/local/bin/sing-box
+          sing-box version
+
+          echo "校验配置..."
+          sing-box check -c config.json
+
+          echo "后台启动 sing-box..."
+          nohup sing-box run -c config.json > singbox.log 2>&1 &
+
+          echo "等待本地代理 127.0.0.1:8080 就绪..."
+          for i in $(seq 1 15); do
+            if curl -s -m 8 -x http://127.0.0.1:8080 https://api.ipify.org > proxy_ip.txt; then
+              echo "代理已就绪, 出口 IP: $(cat proxy_ip.txt)"
+              echo "browser_proxy=http://127.0.0.1:8080" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::sing-box 代理启动失败, 请检查 singbox.log"
+          cat singbox.log || true
+          exit 1
+
+      - name: Run
+        env:
+          ACCOUNTS: ${{ secrets.ACCOUNTS }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          BROWSER_PROXY: ${{ steps.proxy.outputs.browser_proxy }}
+        run: python rustix_boot.py
+
+      # 失败时上传调试截图/日志, 方便排查登录/盾/代理问题
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-artifacts
+          path: |
+            debug_*.png
+            run.log
+            singbox.log
+          if-no-files-found: ignore
+          retention-days: 3
