@@ -48,28 +48,38 @@ BROWSER_PROXY = os.environ.get("BROWSER_PROXY", "").strip()
 
 
 # ---------------- 账号加载 ----------------
-def parse_accounts_string(raw: str):
-    """解析 '邮箱:密码,邮箱:密码' —— 逗号分账号, 首个冒号分邮箱/密码。"""
+def load_numbered_accounts():
+    """扫描编号变量对 EMAIL_1/PASSWORD_1, EMAIL_2/PASSWORD_2 ...
+    邮箱密码各自独立变量, 密码含任何特殊字符都不受影响。
+    从 1 开始连续编号, 遇到缺失的编号即停止。
+    """
     accounts = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item or ":" not in item:
+    # 扫到连续 3 个空号才停止, 容忍中间编号留空 (GitHub 未设置的 secret 会注入空串)
+    i = 1
+    empty_streak = 0
+    while empty_streak < 3:
+        email = (os.environ.get(f"EMAIL_{i}") or "").strip()
+        # 密码不 strip, 避免误删首尾有意义的空白字符
+        password = os.environ.get(f"PASSWORD_{i}") or ""
+        if not email and not password:
+            empty_streak += 1
+            i += 1
             continue
-        email, password = item.split(":", 1)
-        email, password = email.strip(), password.strip()
+        empty_streak = 0
         if email and password:
             accounts.append({"email": email, "password": password})
+        else:
+            logger.warning(f"EMAIL_{i}/PASSWORD_{i} 不完整, 跳过")
+        i += 1
     return accounts
 
 
 def load_accounts():
-    """优先级: 环境变量 ACCOUNTS > accounts.json。"""
-    env = os.environ.get("ACCOUNTS", "").strip()
-    if env:
-        accounts = parse_accounts_string(env)
-        if accounts:
-            logger.info(f"从环境变量 ACCOUNTS 加载 {len(accounts)} 个账号")
-            return accounts
+    """优先级: 编号变量 EMAIL_n/PASSWORD_n > accounts.json。"""
+    accounts = load_numbered_accounts()
+    if accounts:
+        logger.info(f"从编号变量 EMAIL_n/PASSWORD_n 加载 {len(accounts)} 个账号")
+        return accounts
 
     path = os.environ.get("ACCOUNTS_FILE", "accounts.json")
     if os.path.exists(path):
@@ -80,7 +90,9 @@ def load_accounts():
         logger.info(f"从 {path} 加载 {len(data)} 个账号")
         return data
 
-    raise RuntimeError("未配置账号: 设置环境变量 ACCOUNTS 或创建 accounts.json")
+    raise RuntimeError(
+        "未配置账号: 设置环境变量 EMAIL_1/PASSWORD_1 (可 EMAIL_2/PASSWORD_2 ...) 或创建 accounts.json"
+    )
 
 
 # ---------------- Telegram 通知 (内置, 可选) ----------------

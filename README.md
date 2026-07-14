@@ -21,11 +21,12 @@
 pip install -r requirements.txt
 playwright install --with-deps chromium
 
-# 方式一：环境变量
-export ACCOUNTS="a@x.com:pass1,b@x.com:pass2"
+# 方式一：编号环境变量（密码含特殊字符也没问题）
+export EMAIL_1="a@x.com"; export PASSWORD_1="pass:with,special@chars"
+export EMAIL_2="b@x.com"; export PASSWORD_2="pass2"
 python rustix_boot.py
 
-# 方式二：账号文件（cp accounts.example.json accounts.json 后编辑）
+# 方式二：账号文件 accounts.json，形如 [{"email":"..","password":".."}]
 python rustix_boot.py
 
 # 调试：显示浏览器窗口 / 只跑某个账号
@@ -40,17 +41,20 @@ Settings → Secrets and variables → Actions 添加：
 
 | Secret | 说明 | 必填 |
 |--------|------|------|
-| `ACCOUNTS` | `邮箱:密码,邮箱:密码` | ✅ |
+| `EMAIL_1` / `PASSWORD_1` | 第 1 个账号的邮箱 / 密码（各自独立，密码含 `:` `,` `@` 等特殊字符都没问题） | ✅ |
+| `EMAIL_2` / `PASSWORD_2` … | 更多账号，依次编号；默认支持到 5 个 | 可选 |
 | `PROXY_STR` | 代理节点链接(vless/tuic/hy2/ss…)或完整 sing-box JSON | 可选 |
 | `TG_BOT_TOKEN` | Telegram 机器人 token | 可选 |
 | `TG_CHAT_ID` | Telegram 接收 chat id | 可选 |
+
+> 超过 5 个账号：在 [.github/workflows/rustix.yml](.github/workflows/rustix.yml) 的 `Run` 步骤 env 里继续加 `EMAIL_6/PASSWORD_6 …` 映射即可。
 
 ### 代理（可选）
 
 配了 `PROXY_STR` 时，workflow 会用 [convert_proxy.py](convert_proxy.py) 把它转成 sing-box 配置，后台起一个本地 `http://127.0.0.1:8080` 代理，浏览器全程走它出网（换出口 IP）。没配则直连。
 
 - 走 HTTP（sing-box 的 `mixed` 入站，比 SOCKS 更稳），脚本读环境变量 `BROWSER_PROXY` 生效
-- 启动后会 curl 探测代理直到就绪，起不来直接 fail 并把 `singbox.log` 传成 artifact
+- 启动后会 curl 探测代理直到就绪，起不来直接 fail 并把 `singbox.log`（已脱敏）打进日志
 - 本地调试走代理：`export BROWSER_PROXY=http://127.0.0.1:8080` 后再跑
 
 默认每 6 小时跑一次，也可在 Actions 页手动 `Run workflow`。改频率编辑 [.github/workflows/rustix.yml](.github/workflows/rustix.yml) 里的 cron。
@@ -62,7 +66,7 @@ Settings → Secrets and variables → Actions 添加：
 
 ## 排查
 
-- 失败时 Actions 会上传 `debug_*.png` 截图和 `run.log`（artifact，保留 3 天）
+- 排查看 Actions 实时日志（`run.log` 内容已同步打到 stdout）
 - 日志出现 `被盾拦截` → 盾没过，多为登录等待不足，调大 `SHIELD_WAIT`
 - `登录失败: 账号或密码错误` → 检查 ACCOUNTS
 - `发送成功但未确认到 running` → 指令到了但服务器没起，可能被挂起(suspended)需先续费
