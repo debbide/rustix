@@ -59,15 +59,27 @@ jobs:
           echo "等待本地代理 127.0.0.1:8080 就绪..."
           for i in $(seq 1 15); do
             if curl -s -m 8 -x http://127.0.0.1:8080 https://api.ipify.org > proxy_ip.txt; then
-              echo "代理已就绪, 出口 IP: $(cat proxy_ip.txt)"
+              IP="$(cat proxy_ip.txt)"
+              # 脱敏: 只显示前两段, 如 203.0.x.x / IPv6 显示前缀; 完整 IP 不入日志
+              if echo "$IP" | grep -q ':'; then
+                MASKED="$(echo "$IP" | cut -d: -f1-2):x:x"
+              else
+                MASKED="$(echo "$IP" | cut -d. -f1-2).x.x"
+              fi
+              echo "代理已就绪, 出口 IP: ${MASKED}"
               echo "browser_proxy=http://127.0.0.1:8080" >> "$GITHUB_OUTPUT"
+              rm -f proxy_ip.txt
               exit 0
             fi
             sleep 2
           done
 
-          echo "::error::sing-box 代理启动失败, 请检查 singbox.log"
-          cat singbox.log || true
+          echo "::error::sing-box 代理启动失败 (日志已脱敏, 隐藏代理服务器地址)"
+          # 脱敏: 掩码 IPv4、域名:端口、纯 host:port, 避免代理服务器地址泄进公开日志
+          sed -E \
+            -e 's/([0-9]{1,3}\.[0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}/\1.x.x/g' \
+            -e 's/([A-Za-z0-9-]+\.)+[A-Za-z]{2,}(:[0-9]+)?/<host>\2/g' \
+            singbox.log 2>/dev/null || echo "(无 singbox.log)"
           exit 1
 
       - name: Run
@@ -77,16 +89,3 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           BROWSER_PROXY: ${{ steps.proxy.outputs.browser_proxy }}
         run: python rustix_boot.py
-
-      # 失败时上传调试截图/日志, 方便排查登录/盾/代理问题
-      - name: Upload debug artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-artifacts
-          path: |
-            debug_*.png
-            run.log
-            singbox.log
-          if-no-files-found: ignore
-          retention-days: 3
