@@ -84,7 +84,18 @@ jobs:
 
       - name: Run
         env:
-          ACCOUNTS: ${{ secrets.ACCOUNTS }}
+          # 编号账号对: 密码含特殊字符 (: , @ 等) 也不受影响
+          # 需要更多账号就继续加 EMAIL_6/PASSWORD_6 ... 并在此映射
+          EMAIL_1: ${{ secrets.EMAIL_1 }}
+          PASSWORD_1: ${{ secrets.PASSWORD_1 }}
+          EMAIL_2: ${{ secrets.EMAIL_2 }}
+          PASSWORD_2: ${{ secrets.PASSWORD_2 }}
+          EMAIL_3: ${{ secrets.EMAIL_3 }}
+          PASSWORD_3: ${{ secrets.PASSWORD_3 }}
+          EMAIL_4: ${{ secrets.EMAIL_4 }}
+          PASSWORD_4: ${{ secrets.PASSWORD_4 }}
+          EMAIL_5: ${{ secrets.EMAIL_5 }}
+          PASSWORD_5: ${{ secrets.PASSWORD_5 }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           BROWSER_PROXY: ${{ steps.proxy.outputs.browser_proxy }}
