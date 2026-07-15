@@ -6,10 +6,10 @@ Rustix 服务器自动开机 —— 二合一方案
 - 登录后在页面内 fetch 直接发 POST 开机 (不走点击流)
 - 自动拉取账号下所有服务器, 逐个开机
 - 无状态: 每次干净登录, 不缓存 cookie
-- 可选 Telegram 通知
+- 可选 Telegram 通知 (含邮箱打码 & 德国国旗)
 
 站点语言: 俄语 / 英语
-账号配置: 环境变量 ACCOUNTS="邮箱:密码,邮箱:密码" 或 accounts.json
+账号配置: 环境变量 EMAIL_n/PASSWORD_n 或 accounts.json
 """
 
 import json
@@ -43,7 +43,6 @@ STEP_WAIT = 3000
 STATE_RETRY = 5
 STATE_INTERVAL = 4  # 秒
 # 浏览器代理 (由 sing-box 提供的本地 http 代理), 空则直连
-# 由 workflow 里 convert_proxy.py 生成配置、sing-box 监听 127.0.0.1:8080
 BROWSER_PROXY = os.environ.get("BROWSER_PROXY", "").strip()
 
 
@@ -51,15 +50,13 @@ BROWSER_PROXY = os.environ.get("BROWSER_PROXY", "").strip()
 def load_numbered_accounts():
     """扫描编号变量对 EMAIL_1/PASSWORD_1, EMAIL_2/PASSWORD_2 ...
     邮箱密码各自独立变量, 密码含任何特殊字符都不受影响。
-    从 1 开始连续编号, 遇到缺失的编号即停止。
+    从 1 开始连续编号, 遇到连续 3 个缺失的编号即停止。
     """
     accounts = []
-    # 扫到连续 3 个空号才停止, 容忍中间编号留空 (GitHub 未设置的 secret 会注入空串)
     i = 1
     empty_streak = 0
     while empty_streak < 3:
         email = (os.environ.get(f"EMAIL_{i}") or "").strip()
-        # 密码不 strip, 避免误删首尾有意义的空白字符
         password = os.environ.get(f"PASSWORD_{i}") or ""
         if not email and not password:
             empty_streak += 1
@@ -95,7 +92,7 @@ def load_accounts():
     )
 
 
-# ---------------- Telegram 通知 (内置, 可选) ----------------
+# ---------------- Telegram 通知 ----------------
 def tg_enabled():
     return bool(os.environ.get("TG_BOT_TOKEN") and os.environ.get("TG_CHAT_ID"))
 
@@ -120,6 +117,85 @@ def tg_send(text: str):
         urllib.request.urlopen(req, timeout=15)
     except Exception as e:
         logger.warning(f"Telegram 通知失败: {e}")
+
+
+def mask_email(email: str) -> str:
+    """把邮箱打码: user@example.com → u**r@e***.com"""
+    if "@" not in email:
+        return email[:2] + "***"
+    local, domain = email.split("@", 1)
+    # 本地部分: 保留首尾各 1 字符, 中间打码
+    if len(local) <= 2:
+        masked_local = local[0] + "*"
+    else:
+        masked_local = local[0] + "*" * (len(local) - 2) + local[-1]
+    # 域名部分: 保留首字符和后缀
+    dot_idx = domain.rfind(".")
+    if dot_idx > 0:
+        domain_name = domain[:dot_idx]
+        suffix = domain[dot_idx:]
+        if len(domain_name) <= 2:
+            masked_domain = domain_name[0] + "*"
+        else:
+            masked_domain = domain_name[0] + "*" * (len(domain_name) - 1)
+        masked_domain_full = masked_domain + suffix
+    else:
+        masked_domain_full = domain[0] + "***"
+    return f"{masked_local}@{masked_domain_full}"
+
+
+def build_summary(results, elapsed: float = 0.0) -> str:
+    ok_states = ("started", "already_running")
+    status_label = {
+        "started":         "✅ 已启动",
+        "already_running": "🟢 运行中",
+        "suspended":       "⛔ 已暂停",
+        "failed":          "❌ 失败",
+    }
+
+    now = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    lines = [
+        "╔══════════════════════════╗",
+        "🖥️  <b>Rustix 自动开机报告</b>  🇩🇪",
+        f"🕐 {now} (UTC+8)",
+        "╚══════════════════════════╝",
+        "",
+    ]
+
+    total_srv = 0
+    ok_srv = 0
+    has_account_error = False
+
+    for r in results:
+        display = mask_email(r["email"])
+        if r["error"]:
+            has_account_error = True
+            lines.append(f"👤 <code>{display}</code>")
+            lines.append(f"  └ ⚠️ {r['error']}")
+            lines.append("")
+            continue
+
+        srv_list = r["servers"]
+        lines.append(f"👤 <code>{display}</code>  ({len(srv_list)} 台)")
+        for i, s in enumerate(srv_list):
+            total_srv += 1
+            label = status_label.get(s["status"], f"❓ {s['status']}")
+            is_last = (i == len(srv_list) - 1)
+            prefix = "  └" if is_last else "  ├"
+            if s["status"] in ok_states:
+                ok_srv += 1
+            lines.append(f"{prefix} {label}  <code>{s['id']}</code>")
+        lines.append("")
+
+    all_ok = (ok_srv == total_srv) and not has_account_error
+    overall = "🎉 全部正常" if all_ok else "⚠️ 部分异常"
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"📊 结果：<b>{ok_srv}/{total_srv}</b> 台正常  {overall}")
+    if elapsed > 0:
+        lines.append(f"⏱ 耗时：{elapsed:.1f} 秒")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━")
+
+    return "\n".join(lines)
 
 
 # ---------------- 登录 ----------------
@@ -235,7 +311,6 @@ def list_servers(page: Page):
         logger.error("拉取列表被盾拦截, 登录态未过盾")
         return []
     try:
-        # body 被截断到 300 字, 列表可能不完整 —— 重新完整取一次
         full = page.evaluate(
             """async () => {
                 const r = await fetch('/api/client', { headers: { 'Accept': 'application/json' } });
@@ -348,26 +423,6 @@ def process_account(account: dict, pw, headless: bool = True):
         logger.info(f"========== 账号 {email} 处理结束 ==========\n")
 
 
-# ---------------- 汇总通知 ----------------
-def build_summary(results):
-    ok_states = ("started", "already_running")
-    lines = ["<b>🚀 Rustix 开机汇总</b>"]
-    total_srv = 0
-    ok_srv = 0
-    for r in results:
-        if r["error"]:
-            lines.append(f"❌ <code>{r['email']}</code>: {r['error']}")
-            continue
-        for s in r["servers"]:
-            total_srv += 1
-            mark = "✅" if s["status"] in ok_states else "❌"
-            if s["status"] in ok_states:
-                ok_srv += 1
-            lines.append(f"{mark} <code>{r['email']}</code> {s['id']} — {s['status']}")
-    lines.append(f"\n共 {ok_srv}/{total_srv} 台在线")
-    return "\n".join(lines)
-
-
 # ---------------- 主入口 ----------------
 def main():
     parser = argparse.ArgumentParser(description="Rustix 服务器自动开机 (登录+发包 二合一)")
@@ -386,6 +441,8 @@ def main():
     if tg_enabled():
         logger.info("已启用 Telegram 通知")
 
+    start_time = time.time()
+
     results = []
     with sync_playwright() as pw:
         for idx, acc in enumerate(accounts, 1):
@@ -394,7 +451,9 @@ def main():
             if idx < len(accounts):
                 time.sleep(5)
 
-    # 汇总
+    elapsed = time.time() - start_time
+
+    # 汇总日志
     ok_states = ("started", "already_running")
     logger.info("================ 结果汇总 ================")
     all_ok = True
@@ -410,7 +469,7 @@ def main():
             logger.info(f"[{flag}] {r['email']} | {s['id']} | {s['status']}")
 
     if tg_enabled():
-        tg_send(build_summary(results))
+        tg_send(build_summary(results, elapsed))
 
     sys.exit(0 if all_ok else 1)
 
