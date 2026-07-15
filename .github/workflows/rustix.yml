@@ -1,10 +1,9 @@
-name: rustix-boot
+name: rustix-start
 
 on:
-  schedule:
-    # 每 6 小时跑一次 (避开整点, GitHub Actions 整点最拥堵会延迟)
-    - cron: '17 */6 * * *'
-  workflow_dispatch: {}   # 支持手动触发
+  repository_dispatch:
+    types: [rustix]
+  workflow_dispatch:
 
 # 避免上一次还没跑完就又触发, 排队串行
 concurrency:
