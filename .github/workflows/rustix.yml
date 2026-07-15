@@ -2,7 +2,7 @@ name: rustix-start
 
 on:
   repository_dispatch:
-    types: [rustix]
+    types: [rust]
   workflow_dispatch:
 
 # 避免上一次还没跑完就又触发, 排队串行
